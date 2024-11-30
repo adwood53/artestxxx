@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Nicole Model Viewer</title>
+    <script src="https://aframe.io/aframe/dist/aframe-master.js"></script>
+    <style>
+      .control-buttons {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 1000;
+        display: flex;
+        gap: 10px;
+        touch-action: none;
+      }
+      
+      .control-btn {
+        -webkit-appearance: none;
+        background: rgba(255, 255, 255, 0.9);
+        border: none;
+        border-radius: 50%;
+        width: 60px;
+        height: 60px;
+        font-size: 28px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        padding: 0;
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+      }
+
+      .reset-btn {
+        font-size: 18px;
+        width: 80px;
+        border-radius: 30px;
+      }
+    </style>
+    <script>
+      AFRAME.registerComponent('follow-shadow', {
+        schema: {type: 'selector'},
+        init() {
+          this.el.object3D.renderOrder = -1;
+        },
+        tick() {
+          if (this.data) {
+            this.el.object3D.position.copy(this.data.object3D.position);
+            this.el.object3D.position.y -= 0.001;
+          }
+        }
+      });
+
+      AFRAME.registerComponent('camera-background-plane', {
+        schema: {
+          distance: { type: 'number', default: -3 }
+        },
+
+        init: function() {
+          this.video = document.createElement('video');
+          this.video.setAttribute('autoplay', true);
+          this.video.setAttribute('playsinline', true);
+          this.video.setAttribute('webkit-playsinline', true);
+          
+          const setupPlane = () => {
+            if (!this.video.videoWidth) return;
+            
+            const fov = this.el.sceneEl.camera.fov;
+            const distance = Math.abs(this.data.distance);
+            const vFov = THREE.MathUtils.degToRad(fov);
+            const height = 2 * Math.tan(vFov / 2) * distance;
+            const width = height * (window.innerWidth / window.innerHeight);
+
+            if (this.plane) {
+              this.el.removeObject3D('mesh');
+            }
+
+            const geometry = new THREE.PlaneGeometry(width, height);
+            const material = new THREE.MeshBasicMaterial({
+              map: new THREE.VideoTexture(this.video),
+              side: THREE.DoubleSide
+            });
+            
+            this.plane = new THREE.Mesh(geometry, material);
+            this.plane.position.z = this.data.distance;
+            this.el.setObject3D('mesh', this.plane);
+          };
+
+          if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            navigator.mediaDevices.getUserMedia({
+              video: {
+                facingMode: 'environment',
+                width: { ideal: 1920 },
+                height: { ideal: 1080 }
+              }
+            })
+            .then((stream) => {
+              this.video.srcObject = stream;
+              this.video.play();
+              this.video.addEventListener('loadedmetadata', setupPlane);
+            })
+            .catch(console.error);
+          }
+
+          window.addEventListener('resize', setupPlane);
+        }
+      });
+
+      AFRAME.registerComponent('model-control', {
+        init: function() {
+          this.touchStart = { x: 0, y: 0 };
+          this.currentRotation = { y: 90, z: 0 };
+          this.isRotating = false;
+          this.currentZ = -1;
+
+          this.setupTouchEvents();
+          this.createControls();
+          this.updateRotation();
+        },
+
+        setupTouchEvents: function() {
+          const canvas = document.querySelector('canvas');
+          if (!canvas) return;
+
+          document.addEventListener('contextmenu', (e) => e.preventDefault());
+          
+          const touchStartHandler = (e) => {
+            if (e.target === canvas) {
+              e.preventDefault();
+              this.isRotating = true;
+              this.touchStart.x = e.type === 'touchstart' ? e.touches[0].clientX : e.clientX;
+              this.touchStart.y = e.type === 'touchstart' ? e.touches[0].clientY : e.clientY;
+            }
+          };
+
+          const touchMoveHandler = (e) => {
+            if (!this.isRotating) return;
+            e.preventDefault();
+
+            const currentX = e.type === 'touchmove' ? e.touches[0].clientX : e.clientX;
+            const currentY = e.type === 'touchmove' ? e.touches[0].clientY : e.clientY;
+            
+            const deltaX = currentX - this.touchStart.x;
+            const deltaY = currentY - this.touchStart.y;
+
+            this.currentRotation.y += deltaX * 0.25;
+            this.currentRotation.z += deltaY * 0.25;
+
+            this.updateRotation();
+
+            this.touchStart.x = currentX;
+            this.touchStart.y = currentY;
+          };
+
+          const touchEndHandler = () => {
+            this.isRotating = false;
+          };
+
+          canvas.addEventListener('touchstart', touchStartHandler, { passive: false });
+          canvas.addEventListener('touchmove', touchMoveHandler, { passive: false });
+          canvas.addEventListener('touchend', touchEndHandler);
+          canvas.addEventListener('mousedown', touchStartHandler);
+          canvas.addEventListener('mousemove', touchMoveHandler);
+          canvas.addEventListener('mouseup', touchEndHandler);
+        },
+
+        createControls: function() {
+          const controls = document.createElement('div');
+          controls.className = 'control-buttons';
+
+          const zoomOutBtn = document.createElement('button');
+          zoomOutBtn.className = 'control-btn';
+          zoomOutBtn.textContent = '−';
+          ['touchstart', 'click'].forEach(eventName => {
+            zoomOutBtn.addEventListener(eventName, (e) => {
+              e.preventDefault();
+              this.updatePosition(0.1);
+            });
+          });
+
+          const resetBtn = document.createElement('button');
+          resetBtn.className = 'control-btn reset-btn';
+          resetBtn.textContent = 'RESET';
+          ['touchstart', 'click'].forEach(eventName => {
+            resetBtn.addEventListener(eventName, (e) => {
+              e.preventDefault();
+              this.resetModel();
+            });
+          });
+
+          const zoomInBtn = document.createElement('button');
+          zoomInBtn.className = 'control-btn';
+          zoomInBtn.textContent = '+';
+          ['touchstart', 'click'].forEach(eventName => {
+            zoomInBtn.addEventListener(eventName, (e) => {
+              e.preventDefault();
+              this.updatePosition(-0.1);
+            });
+          });
+
+          controls.appendChild(zoomOutBtn);
+          controls.appendChild(resetBtn);
+          controls.appendChild(zoomInBtn);
+          document.body.appendChild(controls);
+        },
+
+        updatePosition: function(delta) {
+          this.currentZ += delta;
+          this.currentZ = Math.max(-2, Math.min(-0.3, this.currentZ));
+          this.el.object3D.position.z = this.currentZ;
+        },
+
+        resetModel: function() {
+          this.currentZ = -1;
+          this.currentRotation = { y: 90, z: 0 };
+          this.el.object3D.position.z = this.currentZ;
+          this.updateRotation();
+        },
+
+        updateRotation: function() {
+          this.el.object3D.rotation.y = THREE.MathUtils.degToRad(this.currentRotation.y);
+          this.el.object3D.rotation.z = THREE.MathUtils.degToRad(this.currentRotation.z);
+        }
+      });
+    </script>
+  </head>
+  <body>
+    <a-scene
+      renderer="colorManagement: true; physicallyCorrectLights: true; exposure: 1; toneMapping: ACESFilmic"
+      shadow="type: pcfsoft"
+    >
+      <a-assets>
+        <a-asset-item id="model" src="public/your-model.glb"></a-asset-item>
+      </a-assets>
+
+      <a-light type="directional" light="castShadow:true;" position="1 1 1" intensity="1.57" shadow-camera-automatic="#model-container"></a-light>
+      
+      <a-camera position="0 0.4 0" wasd-controls="enabled: false" look-controls="enabled: false">
+        <a-entity camera-background-plane="distance: -3"></a-entity>
+        <a-light 
+          type="point" 
+          intensity="5" 
+          distance="100" 
+          position="0 0 -1"
+          color="#ffffff">
+        </a-light>
+      </a-camera>
+      
+      <a-entity 
+        id="model-container" 
+        position="0 0.5 -1" 
+        scale="0.4 0.4 0.4" 
+        rotation="0 90 0"
+        model-control
+        shadow>
+        <a-entity
+          gltf-model="#model"
+          position="0 0 0"  
+          shadow="cast: true; receive: true">
+        </a-entity>
+      </a-entity>
+      
+      <a-plane follow-shadow="#model-container" material="shader:shadow" shadow="cast:false;" rotation="-90 0 0" width="2" height="2"></a-plane>
+    </a-scene>
+  </body>
+</html>
